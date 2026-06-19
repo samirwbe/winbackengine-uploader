@@ -31,3 +31,19 @@ def upload_to_drive(file_content, filename, folder_id, mimetype):
     file_metadata = {"name": filename, "parents": [folder_id]}
     media = MediaIoBaseUpload(io.BytesIO(file_content), mimetype=mimetype)
     service.files().create(
+        body=file_metadata,
+        media_body=media,
+        supportsAllDrives=True,
+        fields="id"
+    ).execute()
+
+def download_zoom_file(url, token):
+    session = requests.Session()
+    response = session.get(
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+        allow_redirects=True,
+        timeout=300
+    )
+    content_type = response.headers.get("content-type", "")
+    if "text/html" in content_type or len(response.content) < 10000:
