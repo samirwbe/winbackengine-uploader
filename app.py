@@ -12,9 +12,25 @@ import hashlib
 app = Flask(__name__)
 
 ZOOM_SECRET_TOKEN = os.environ.get("ZOOM_SECRET_TOKEN")
+ZOOM_ACCOUNT_ID = os.environ.get("ZOOM_ACCOUNT_ID")
+ZOOM_CLIENT_ID = os.environ.get("ZOOM_CLIENT_ID")
+ZOOM_CLIENT_SECRET = os.environ.get("ZOOM_CLIENT_SECRET")
 GOOGLE_CREDS = os.environ.get("GOOGLE_CREDS")
 RECORDINGS_FOLDER_ID = os.environ.get("RECORDINGS_FOLDER_ID")
 TRANSCRIPTS_FOLDER_ID = os.environ.get("TRANSCRIPTS_FOLDER_ID")
+
+processed_meetings = set()
+
+def get_zoom_token():
+    import base64
+    credentials = base64.b64encode(
+        f"{ZOOM_CLIENT_ID}:{ZOOM_CLIENT_SECRET}".encode()
+    ).decode()
+    response = requests.post(
+        f"https://zoom.us/oauth/token?grant_type=account_credentials&account_id={ZOOM_ACCOUNT_ID}",
+        headers={"Authorization": f"Basic {credentials}"}
+    )
+    return response.json().get("access_token")
 
 def get_drive_service():
     creds_dict = json.loads(GOOGLE_CREDS)
@@ -36,12 +52,10 @@ def upload_to_drive(file_content, filename, folder_id, mimetype):
     ).execute()
 
 def download_zoom_file(url, token):
-    # Append token as query parameter — most reliable method
-    download_url = f"{url}?access_token={token}"
     response = requests.get(
-        download_url,
-        allow_redirects=True,
-        stream=True
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+        allow_redirects=True
     )
     return response.content
 
@@ -64,11 +78,17 @@ def webhook():
     if data.get("event") == "recording.completed":
         payload = data["payload"]["object"]
         topic = payload.get("topic", "")
+        meeting_id = payload.get("uuid", "")
 
         if "WinbackEngine" not in topic:
             return jsonify({"status": "filtered"}), 200
 
-        download_token = payload.get("download_access_token", "")
+        # Prevent duplicate processing
+        if meeting_id in processed_meetings:
+            return jsonify({"status": "already processed"}), 200
+        processed_meetings.add(meeting_id)
+
+        token = get_zoom_token()
         recording_files = payload.get("recording_files", [])
         start_time = payload.get("start_time", "")[:10]
         filename_base = f"{topic} - {start_time}"
@@ -77,16 +97,16 @@ def webhook():
             file_type = file.get("file_type", "")
             download_url = file.get("download_url", "")
 
-            if not download_url:
+            if not download_url or file_type not in ["MP4", "TRANSCRIPT"]:
                 continue
 
+            content = download_zoom_file(download_url, token)
+
             if file_type == "MP4":
-                content = download_zoom_file(download_url, download_token)
                 upload_to_drive(content, f"{filename_base}.mp4",
                     RECORDINGS_FOLDER_ID, "video/mp4")
 
             elif file_type == "TRANSCRIPT":
-                content = download_zoom_file(download_url, download_token)
                 upload_to_drive(content, f"{filename_base}.vtt",
                     TRANSCRIPTS_FOLDER_ID, "text/vtt")
 
