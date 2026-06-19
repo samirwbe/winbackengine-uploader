@@ -8,15 +8,28 @@ import io
 import json
 import hmac
 import hashlib
+import base64
 
 app = Flask(__name__)
 
 ZOOM_SECRET_TOKEN = os.environ.get("ZOOM_SECRET_TOKEN")
+ZOOM_CLIENT_ID = os.environ.get("ZOOM_CLIENT_ID")
+ZOOM_CLIENT_SECRET = os.environ.get("ZOOM_CLIENT_SECRET")
 GOOGLE_CREDS = os.environ.get("GOOGLE_CREDS")
 RECORDINGS_FOLDER_ID = os.environ.get("RECORDINGS_FOLDER_ID")
 TRANSCRIPTS_FOLDER_ID = os.environ.get("TRANSCRIPTS_FOLDER_ID")
 
 processed_meetings = set()
+
+def get_zoom_token():
+    credentials = base64.b64encode(
+        f"{ZOOM_CLIENT_ID}:{ZOOM_CLIENT_SECRET}".encode()
+    ).decode()
+    response = requests.post(
+        "https://zoom.us/oauth/token?grant_type=client_credentials",
+        headers={"Authorization": f"Basic {credentials}"}
+    )
+    return response.json().get("access_token")
 
 def get_drive_service():
     creds_dict = json.loads(GOOGLE_CREDS)
@@ -45,13 +58,6 @@ def download_zoom_file(url, token):
         allow_redirects=True,
         timeout=300
     )
-    content_type = response.headers.get("content-type", "")
-    if "text/html" in content_type or len(response.content) < 10000:
-        response = session.get(
-            f"{url.split('?')[0]}?access_token={token}",
-            allow_redirects=True,
-            timeout=300
-        )
     return response.content
 
 @app.route("/webhook", methods=["POST"])
@@ -82,7 +88,7 @@ def webhook():
             return jsonify({"status": "duplicate"}), 200
         processed_meetings.add(meeting_uuid)
 
-        download_token = payload.get("download_access_token", "")
+        token = get_zoom_token()
         recording_files = payload.get("recording_files", [])
         start_time = payload.get("start_time", "")[:10]
         filename_base = f"{topic} - {start_time}"
@@ -96,12 +102,12 @@ def webhook():
                 continue
 
             if file_type == "MP4":
-                content = download_zoom_file(download_url, download_token)
+                content = download_zoom_file(download_url, token)
                 upload_to_drive(content, f"{filename_base}.mp4",
                     RECORDINGS_FOLDER_ID, "video/mp4")
 
             elif file_type in ["TRANSCRIPT", "CC"]:
-                content = download_zoom_file(download_url, download_token)
+                content = download_zoom_file(download_url, token)
                 upload_to_drive(content, f"{filename_base}.txt",
                     TRANSCRIPTS_FOLDER_ID, "text/plain")
 
