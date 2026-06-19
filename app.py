@@ -6,14 +6,15 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 import io
 import json
+import hmac
+import hashlib
 
 app = Flask(__name__)
 
-ZOOM_TOKEN = os.environ.get("ZOOM_TOKEN")
+ZOOM_SECRET_TOKEN = os.environ.get("ZOOM_SECRET_TOKEN")
 GOOGLE_CREDS = os.environ.get("GOOGLE_CREDS")
 RECORDINGS_FOLDER_ID = os.environ.get("RECORDINGS_FOLDER_ID")
 TRANSCRIPTS_FOLDER_ID = os.environ.get("TRANSCRIPTS_FOLDER_ID")
-ZOOM_SECRET_TOKEN = os.environ.get("ZOOM_SECRET_TOKEN")
 
 def get_drive_service():
     creds_dict = json.loads(GOOGLE_CREDS)
@@ -33,20 +34,28 @@ def upload_to_drive(file_content, filename, folder_id, mimetype):
         supportsAllDrives=True
     ).execute()
 
-def download_zoom_file(url):
-    headers = {"Authorization": f"Bearer {ZOOM_TOKEN}"}
-    response = requests.get(url, headers=headers)
+def download_zoom_file(url, token):
+    response = requests.get(
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+        allow_redirects=True
+    )
     return response.content
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.json
 
-    # Handle Zoom challenge
     if data.get("event") == "endpoint.url_validation":
+        plain_token = data["payload"]["plainToken"]
+        encrypted = hmac.new(
+            ZOOM_SECRET_TOKEN.encode(),
+            plain_token.encode(),
+            hashlib.sha256
+        ).hexdigest()
         return jsonify({
-            "plainToken": data["payload"]["plainToken"],
-            "encryptedToken": data["payload"]["plainToken"]
+            "plainToken": plain_token,
+            "encryptedToken": encrypted
         })
 
     if data.get("event") == "recording.completed":
@@ -56,6 +65,7 @@ def webhook():
         if "WinbackEngine" not in topic:
             return jsonify({"status": "filtered"}), 200
 
+        download_token = payload.get("download_access_token", "")
         recording_files = payload.get("recording_files", [])
         start_time = payload.get("start_time", "")[:10]
         filename_base = f"{topic} - {start_time}"
@@ -65,12 +75,12 @@ def webhook():
             download_url = file.get("download_url", "")
 
             if file_type == "MP4":
-                content = download_zoom_file(download_url)
+                content = download_zoom_file(download_url, download_token)
                 upload_to_drive(content, f"{filename_base}.mp4",
                     RECORDINGS_FOLDER_ID, "video/mp4")
 
             elif file_type == "TRANSCRIPT":
-                content = download_zoom_file(download_url)
+                content = download_zoom_file(download_url, download_token)
                 upload_to_drive(content, f"{filename_base}.vtt",
                     TRANSCRIPTS_FOLDER_ID, "text/vtt")
 
