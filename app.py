@@ -31,14 +31,17 @@ def upload_to_drive(file_content, filename, folder_id, mimetype):
     service.files().create(
         body=file_metadata,
         media_body=media,
-        supportsAllDrives=True
+        supportsAllDrives=True,
+        fields="id"
     ).execute()
 
 def download_zoom_file(url, token):
+    # Append token as query parameter — most reliable method
+    download_url = f"{url}?access_token={token}"
     response = requests.get(
-        url,
-        headers={"Authorization": f"Bearer {token}"},
-        allow_redirects=True
+        download_url,
+        allow_redirects=True,
+        stream=True
     )
     return response.content
 
@@ -73,6 +76,9 @@ def webhook():
         for file in recording_files:
             file_type = file.get("file_type", "")
             download_url = file.get("download_url", "")
+
+            if not download_url:
+                continue
 
             if file_type == "MP4":
                 content = download_zoom_file(download_url, download_token)
