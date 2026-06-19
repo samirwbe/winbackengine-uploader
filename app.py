@@ -47,3 +47,66 @@ def download_zoom_file(url, token):
     )
     content_type = response.headers.get("content-type", "")
     if "text/html" in content_type or len(response.content) < 10000:
+        response = session.get(
+            f"{url.split('?')[0]}?access_token={token}",
+            allow_redirects=True,
+            timeout=300
+        )
+    return response.content
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    data = request.json
+
+    if data.get("event") == "endpoint.url_validation":
+        plain_token = data["payload"]["plainToken"]
+        encrypted = hmac.new(
+            ZOOM_SECRET_TOKEN.encode(),
+            plain_token.encode(),
+            hashlib.sha256
+        ).hexdigest()
+        return jsonify({
+            "plainToken": plain_token,
+            "encryptedToken": encrypted
+        })
+
+    if data.get("event") == "recording.completed":
+        payload = data["payload"]["object"]
+        topic = payload.get("topic", "")
+        meeting_uuid = payload.get("uuid", "")
+
+        if "WinbackEngine" not in topic:
+            return jsonify({"status": "filtered"}), 200
+
+        if meeting_uuid in processed_meetings:
+            return jsonify({"status": "duplicate"}), 200
+        processed_meetings.add(meeting_uuid)
+
+        download_token = payload.get("download_access_token", "")
+        recording_files = payload.get("recording_files", [])
+        start_time = payload.get("start_time", "")[:10]
+        filename_base = f"{topic} - {start_time}"
+
+        for file in recording_files:
+            file_type = file.get("file_type", "")
+            download_url = file.get("download_url", "")
+            status = file.get("status", "")
+
+            if status != "completed" or not download_url:
+                continue
+
+            if file_type == "MP4":
+                content = download_zoom_file(download_url, download_token)
+                upload_to_drive(content, f"{filename_base}.mp4",
+                    RECORDINGS_FOLDER_ID, "video/mp4")
+
+            elif file_type in ["TRANSCRIPT", "CC"]:
+                content = download_zoom_file(download_url, download_token)
+                upload_to_drive(content, f"{filename_base}.txt",
+                    TRANSCRIPTS_FOLDER_ID, "text/plain")
+
+    return jsonify({"status": "ok"}), 200
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
