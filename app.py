@@ -13,6 +13,7 @@ import base64
 app = Flask(__name__)
 
 ZOOM_SECRET_TOKEN = os.environ.get("ZOOM_SECRET_TOKEN")
+ZOOM_ACCOUNT_ID = os.environ.get("ZOOM_ACCOUNT_ID")
 ZOOM_CLIENT_ID = os.environ.get("ZOOM_CLIENT_ID")
 ZOOM_CLIENT_SECRET = os.environ.get("ZOOM_CLIENT_SECRET")
 GOOGLE_CREDS = os.environ.get("GOOGLE_CREDS")
@@ -26,7 +27,7 @@ def get_zoom_token():
         f"{ZOOM_CLIENT_ID}:{ZOOM_CLIENT_SECRET}".encode()
     ).decode()
     response = requests.post(
-        "https://zoom.us/oauth/token?grant_type=client_credentials",
+        f"https://zoom.us/oauth/token?grant_type=account_credentials&account_id={ZOOM_ACCOUNT_ID}",
         headers={"Authorization": f"Basic {credentials}"}
     )
     return response.json().get("access_token")
@@ -51,8 +52,7 @@ def upload_to_drive(file_content, filename, folder_id, mimetype):
     ).execute()
 
 def download_zoom_file(url, token):
-    session = requests.Session()
-    response = session.get(
+    response = requests.get(
         url,
         headers={"Authorization": f"Bearer {token}"},
         allow_redirects=True,
